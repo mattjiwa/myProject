@@ -1,0 +1,290 @@
+---
+title: "Plot Aggregated"
+author: "mjiwa"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Install relevant packages (if you haven't already)
+# install.packages("here", "stringr", "pracma", "plyr", "dplyr",
+#                  "rlang", "ggplot2", "rstatix", "kableExtra",
+#                  "scico", "gridExtra", "reshape2")
+
+# Attach packages
+library(here)
+library(plyr)
+library(dplyr)
+library(rlang)
+library(ggplot2)
+library(rstatix)
+library(kableExtra)
+library(scico)
+library(gridExtra)
+library(reshape2)
+
+```
+
+
+```{r import, include=FALSE}
+
+# Load data
+source(here::here("analysis", "myProj_readData.R"))
+
+# Make function to return mean and sd of grouped data
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  require(dplyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum <- ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  names(data_sum)[names(data_sum) == "mean"] <- varname
+ return(data_sum)
+}
+
+# Create theme for blank axis in ggplot
+blank_theme = theme(
+  axis.text.y = element_text(size = 10, colour = "black"),
+  axis.text.x = element_text(size = 10, colour = "black"),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  legend.position = "none"
+)
+
+```
+
+
+```{css, echo=FALSE}
+.center {
+  display: table;
+  margin-right: auto;
+  margin-left: auto;
+}
+```
+
+## Demographics
+
+### N = `r length(IDs)`, excluded = `r length(excluded)` for failing attention checks.
+
+```{r demographics, echo=FALSE, message=FALSE, fig.height= 3, fig.align = 'center'}
+
+# Make histogram of age data
+agePlot <- ggplot(data = demographics, aes(x = Age)) +
+  geom_histogram(bins = 8, fill = "#f5cb42", color = "black") +
+  xlab("Age") +
+  ylab("Count") +
+  blank_theme +
+  labs(title = "Age") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Compile counts of gender data
+gend <- demographics %>%
+  group_by(Gender) %>% 
+  dplyr::summarise(n = n())
+
+gend$Gender[gend$Gender == "F"] <- "Female"
+gend$Gender[gend$Gender == "M"] <- "Male"
+gend$Gender[gend$Gender == "O"] <- "Other"
+
+# Make pie-chart of gender data
+genderPlot <- ggplot(data = gend, aes(x = "", y = n, fill = Gender)) +
+  geom_bar(stat = "identity", color = "black") +
+  coord_polar("y", start = 0) +
+  blank_theme +
+  labs(title = "Gender",
+       fill = "Gender") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.line = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        legend.position = "right",
+        axis.ticks = element_blank(),
+        panel.border = element_blank())
+
+# Create a grid to display both demographic plots
+gridExtra::grid.arrange(agePlot, genderPlot, ncol=2)
+
+```
+
+## Plot by percentage difference
+
+This is a plot of participants' mean bids divided up by the percentage difference between the two response options.
+
+```{r diffPlots, echo=FALSE, message=FALSE, fig.align = 'center'}
+
+# Create summarised data for plotting
+temp <- data_summary(allTrials, varname = "bid", groupnames = c("diff"))
+temp$se <- temp$sd / sqrt(length(unique(allTrials$ID)))
+temp_ind <- data_summary(allTrials, varname = "bid", groupnames = c("ID", "diff"))
+
+# Make barplot with error bars and individual data points
+diffPlot <- ggplot(data = temp, aes(x = as.factor(diff), y = bid, fill = as.factor(diff))) +
+  geom_bar(colour = "black", size = .5, stat = "identity") +
+  scale_fill_scico_d(palette = 'bilbao', begin = .25, end = .75) +
+  geom_errorbar(aes(ymin = bid-se, ymax = bid+se), width=.2,
+                 position = position_dodge(.9)) +
+  geom_jitter(data = temp_ind, aes(x = as.factor(diff), y = bid), 
+              width = .25, height = 0) +
+  xlab("Difference in Predictors") +
+  ylab("Bid") +
+  blank_theme
+show(diffPlot)
+
+# Make violin plot using the same data
+violinDiffPlot <- ggplot(data = temp_ind, 
+                         aes(x = as.factor(diff), y = bid)) +
+  geom_violin(aes(fill = as.factor(diff))) +
+  geom_boxplot(width = 0.1, fill = "black", alpha = .25, outlier.shape = NA) +
+  xlab("Difference in Predictors") +
+  ylab("Bid") +
+  scale_fill_scico_d(palette = 'bilbao', begin = .25, end = .75) +
+  blank_theme +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 14))
+show(violinDiffPlot)
+
+# Do ANOVA
+# Convert to tibble with factors, remove SD
+temp_ind <- as_tibble(temp_ind) %>%
+  convert_as_factor(ID, diff) %>%
+  select(-sd)
+# Perform ANOVA
+diff.aov <- anova_test(data = temp_ind, dv = bid, wid = ID,
+                       within = diff)$ANOVA
+
+
+```
+<br>
+
+#### ANOVA results:
+<div align="center">
+#### *F*(`r diff.aov$DFn`, `r diff.aov$DFd`) = `r diff.aov$F`, *p* = `r diff.aov$p`, $\eta^{2}$ = `r diff.aov$ges`
+</div>
+
+#### Pairwise comparisons:
+
+```{r diff_pwc, echo=FALSE, message=FALSE}
+
+diff.pwc <- temp_ind %>%
+  pairwise_t_test(
+    bid ~ diff, paired = TRUE,
+    p.adjust.method = "holm"
+    )
+
+diff.pwc.frmt <- as_tibble(diff.pwc) %>% 
+  # Reformat numbers
+  mutate(statistic = abs(round(statistic, 2))) %>% 
+  # Rename columns
+  dplyr::rename(diff_A = group1, diff_B = group2, `t-statistic` = statistic,
+                Outcome = .y., N = n1, `Adjusted p` = p.adj) %>%
+  # Remove columns
+  select(-c(p.adj.signif, n2))
+
+knitr::kable((diff.pwc.frmt[,]), col.names = colnames(diff.pwc.frmt), 
+             row.names = 0) %>%
+  kable_styling(font_size = 14, latex_options = "hold_position") %>%
+  kableExtra::column_spec(1:8, background = 
+                         ifelse(diff.pwc.frmt$`Adjusted p` > .05, 
+                                  "#ebc0c0", "#caebca")) %>%  # red, green
+ row_spec(c(1:6)[diff.pwc.frmt$p < .05 & diff.pwc.frmt$`Adjusted p` > .05],
+          background = "#f2e7b6")
+
+
+```
+
+<br>
+<hr style="border:2px solid gainsboro"> </hr>
+
+## Plot by final colour
+
+#### Plots are divided by whether the final (50% reliable) predictor supported the dominant colour (i.e., colour with the higher reliability) or the non-dominant colour.
+
+Trials with 0 percentage difference were removed from the following analyses.
+
+
+```{r finalColPlots, echo=FALSE, message=FALSE, fig.align = 'center'}
+
+# Remove 0-diff trials
+tempTrials <- allTrials[allTrials$diff != 0,]
+temp <- data_summary(tempTrials, varname = "bid", groupnames = c("finalCol"))
+temp$se <- temp$sd / sqrt(length(unique(allTrials$ID)))
+temp_ind <- data_summary(tempTrials, varname = "bid", groupnames = c("ID", "finalCol"))
+
+
+finalColPlot <- ggplot(data = temp, aes(x = as.factor(finalCol), y = bid, fill = as.factor(finalCol))) +
+  geom_bar(colour = "black", size = .5, stat = "identity") +
+  scale_fill_scico_d(palette = 'devon', begin = .25, end = .75) +
+  geom_errorbar(aes(ymin = bid-se, ymax = bid+se), width=.2,
+                 position = position_dodge(.9)) +
+  geom_jitter(data = temp_ind, aes(x = as.factor(finalCol), y = bid), 
+              width = .25, height = 0) +
+  scale_x_discrete(labels = c("Non-dominant", "Dominant")) +
+  xlab("Final Colour") +
+  ylab("Bid") +
+  blank_theme
+show(finalColPlot)
+
+violinFinalColPlot <- ggplot(data = temp_ind, 
+                         aes(x = as.factor(finalCol), y = bid)) +
+  geom_violin(aes(fill = as.factor(finalCol))) +
+  geom_boxplot(width = 0.1, fill = "black", alpha = .25, outlier.shape = NA) +
+  xlab("Difference in Predictors") +
+  ylab("Bid") +
+  scale_x_discrete(labels = c("Non-dominant", "Dominant")) +
+  scale_fill_scico_d(palette = 'devon', begin = .25, end = .75) +
+  blank_theme +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 14))
+show(violinFinalColPlot)
+
+```
+
+
+## Plot by difference and final colour
+
+```{r finalColDiffPlots, echo=FALSE, message=FALSE, fig.align = 'center'}
+
+# Remove 0-diff trials
+tempTrials <- allTrials[allTrials$diff != 0,]
+temp <- data_summary(tempTrials, varname = "bid", 
+                     groupnames = c("diff", "finalCol"))
+temp$se <- temp$sd / sqrt(length(unique(allTrials$ID)))
+temp_ind <- data_summary(tempTrials, varname = "bid", 
+                         groupnames = c("ID", "diff", "finalCol"))
+
+
+finalColDiffPlot <- ggplot(data = temp, aes(x = as.factor(diff), 
+                                            y = bid, fill = as.factor(finalCol))) +
+  geom_bar(colour = "black", size = .5, position = "dodge", stat = "identity") +
+  geom_errorbar(aes(ymin = bid-se, ymax = bid+se), width=.2,
+                 position = position_dodge(.9)) +
+  geom_jitter(data = temp_ind, shape = 21, aes(x = as.factor(diff), 
+                                                      y = bid, 
+                                                      fill = as.factor(finalCol)), 
+              colour = "black", size = 2, 
+              position = position_jitterdodge(dodge.width = .9, 
+                                              jitter.width = .5)) +
+  xlab("Difference in Predictors") +
+  ylab("Bid") +
+  blank_theme +
+  theme(legend.position = "right") + 
+  scale_fill_manual(name ="Final Colour",
+                    labels = c("Non-dominant", "Dominant"), 
+                    values = c("#D00000", "#3CD000"))
+show(finalColDiffPlot)
+
+```
+
+
+
